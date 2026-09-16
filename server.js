@@ -7,21 +7,31 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Database connection
-const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: '',   // change to your MySQL password
-  database: 'crud'    // change to your database name
+// Database connection pool.
+// Config comes from environment variables so the same image runs locally,
+// in docker-compose, or against RDS without code changes.
+const db = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'crud',
+  port: Number(process.env.DB_PORT) || 3306,
+  waitForConnections: true,
+  connectionLimit: 10,
 });
 
-db.connect((err) => {
+// A pool connects lazily, so ping once at startup just to log reachability.
+db.getConnection((err, conn) => {
   if (err) {
-    console.error('DB connection failed:', err);
+    console.error('DB connection failed:', err.message);
     return;
   }
   console.log('Connected to MySQL');
+  conn.release();
 });
+
+// Health check - used by Docker/monitoring to know the app is up.
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // CREATE - add a new user
 app.post('/users', (req, res) => {
@@ -71,5 +81,5 @@ app.delete('/users/:id', (req, res) => {
 });
 
 // Start server
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

@@ -1,0 +1,65 @@
+name: Build and Deploy
+
+# Deploy on every push to master.
+on:
+  push:
+    branches: [master]
+
+env:
+  # Image name in GitHub Container Registry (must be lowercase).
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # allow pushing the image to GHCR
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Two tags: 'latest' and the exact commit SHA (so you can roll back).
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+      # Copy the compose file + schema to the server.
+      - name: Copy deployment files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml,init.sql"
+          target: "~/app"
+
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/app
+            # Log the server's Docker into GHCR so it can pull the (private) image.
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            export APP_IMAGE=${{ env.IMAGE }}:latest
+            export DB_PASSWORD='${{ secrets.DB_PASSWORD }}'
+            export DB_NAME=crud
+            docker compose pull app
+            docker compose up -d
+            docker image prune -f
